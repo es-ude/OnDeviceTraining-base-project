@@ -13,11 +13,6 @@
     pkgs.picotool
     pkgs.minicom
     pkgs.ninja
-    pkgs.openocd
-    pkgs.stm32cubemx
-    pkgs.graphviz
-    pkgs.uv
-    pkgs.sqlite
 ];
 
   languages = {
@@ -39,21 +34,10 @@
   # https://devenv.sh/services/
   # services.postgres.enable = true;
 
-  # https://devenv.sh/scripts/
-  scripts.hello.exec = ''
-    echo hello from $GREET
-  '';
 
   scripts.open-serial-console.exec = ''
     minicom --device /dev/ttyACM0 
   '';
-
-  # https://devenv.sh/basics/
-  enterTest = ''
-    echo "Running tests"
-    git --version | grep --color=auto "${pkgs.git.version}"
-  '';
-
 
   # See full reference at https://devenv.sh/reference/options/
 }
