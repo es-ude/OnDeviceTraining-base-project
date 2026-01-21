@@ -1,0 +1,109 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "stm32",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "pico",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "STM32F756ZGT6-Debug",
+            "inherits": "stm32",
+            "toolchainFile": "${sourceDir}/cmake/stm32cubemx/stm32f756xg/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ODT_TARGET": "STM32F756XG"
+            }
+        },
+        {
+            "name": "STM32L476RG-Debug",
+            "inherits": "stm32",
+            "toolchainFile": "${sourceDir}/cmake/stm32cubemx/stm32l476xg/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ODT_TARGET": "STM32L476XG"
+            }
+        },
+        {
+            "name": "STM32L4R5ZI-Debug",
+            "inherits": "stm32",
+            "toolchainFile": "${sourceDir}/cmake/stm32cubemx/stm32l4r5zi/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ODT_TARGET": "STM32L4R5XI"
+            }
+        },
+        {
+            "name": "PICO1",
+            "inherits": "pico",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ODT_TARGET": "PICO1"
+            }
+        },
+        {
+            "name": "PICO2_W",
+            "inherits": "pico",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "ODT_TARGET": "PICO2_W"
+            }
+        },
+        {
+            "name": "PREPARE",
+            "cacheVariables": {
+                "ODT_TARGET": "NONE",
+                "ODT_PREPARE": "1"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "stm32",
+            "hidden": true,
+            "configurePreset": "stm32"
+        },
+        {
+            "name": "STM32F756ZGT6-Debug",
+            "configurePreset": "STM32F756ZGT6-Debug"
+        },
+        {
+            "name": "STM32L476RG-Debug",
+            "configurePreset": "STM32L476RG-Debug"
+        },
+        {
+            "name": "STM32L4R5ZI-Debug",
+            "configurePreset": "STM32L4R5ZI-Debug"
+        },
+        {
+            "name": "pico",
+            "hidden": true,
+            "configurePreset": "pico"
+        },
+        {
+            "name": "PICO1",
+            "configurePreset": "PICO1"
+        },
+        {
+            "name": "PICO2_W",
+            "configurePreset": "PICO2_W"
+        },
+        {
+            "name": "PREPARE",
+            "configurePreset": "PREPARE"
+        }
+    ]
+}
