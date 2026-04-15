@@ -1,5 +1,12 @@
 /build
 
+# Claude Code
+CLAUDE.md
+.claude/
+
+# JetBrains IDEs
+.idea/
+
 # Devenv
 .devenv*
 devenv.local.nix
