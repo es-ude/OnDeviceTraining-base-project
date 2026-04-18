@@ -3,9 +3,25 @@ cmake_minimum_required(VERSION 3.16...4.1)
 include(FetchContent)
 include(cmake/build_targets.cmake)
 
+# Select which example under src/examples/<name>.c is compiled into the
+# executable. To add a new example, drop a .c file in src/examples/ and pass
+# -DODT_EXAMPLE=<name>. The default keeps the long-standing PICO/STM32 flow
+# building without any extra flag.
+set(ODT_EXAMPLE "linear_regression" CACHE STRING
+    "Name of the example (src/examples/<ODT_EXAMPLE>.c) to compile.")
+set(ODT_EXAMPLE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/examples/${ODT_EXAMPLE}.c")
+if(NOT ODT_PREPARE)
+    if(NOT EXISTS "${ODT_EXAMPLE_SRC}")
+        message(FATAL_ERROR
+            "ODT_EXAMPLE='${ODT_EXAMPLE}' not found at ${ODT_EXAMPLE_SRC}. "
+            "List available examples with: ls src/examples/*.c")
+    endif()
+endif()
 
 if(${ODT_PICO_PLATFORM})
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pico/pico_pre.cmake)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pico/pico_pre.cmake)
+elseif(${ODT_HOST_PLATFORM})
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/host/host_pre.cmake)
 endif()
 
 project(BA C ASM CXX)
@@ -33,7 +49,7 @@ if(${ODT_PREPARE})
             SOURCE_DIR ${CMAKE_SOURCE_DIR}/pico-sdk/src
             BINARY_DIR ${FETCHCONTENT_BASE_DIR}/pico-sdk/build
             SUBBUILD_DIR ${FETCHCONTENT_BASE_DIR}/pico-sdk/subbuild
-                
+
     )
     FetchContent_Populate(
             odt
@@ -48,38 +64,42 @@ if(${ODT_PREPARE})
            )
 else()
 
-# Each target has to include these libs
+# Common ODT library targets linked into every platform. Extended with
+# ODT_LIBS_HOST_EXTRA for host builds (NPYLoader + CSVHelper need libc
+# filesystem calls not present on the MCU).
 set(ODT_LIBS
-            Layer
-            Tensor
-            Rounding
-            TensorAPI
-            InferenceAPI
-            ReluAPI
-            QuantizationAPI
-            TensorConversion
-            LossFunction
-            LinearAPI
-            Linear
-            Sgd
-            SgdAPI
-            StorageAPI
-            TrainingAPI
-            Optimizer
-            OptimizerAPI
-            MSE
+    # tensor + quantization
+    Tensor TensorApi TensorConversion Quantization QuantizationApi Distributions
+    # common utilities
+    Common Rounding RNG
+    # layers
+    Layer Linear LinearApi Relu ReluApi Softmax SoftmaxApi
+    # loss functions
+    LossFunction MSE CrossEntropy
+    # optimizer
+    Optimizer OptimizerApi Sgd SgdApi
+    # inference + training loop
+    InferenceApi TrainingLoopApi TrainingBatchDefault TrainingEpochDefault CalculateGradsSequential
+    # storage + dataloader
+    StorageApi DataLoader DataLoaderApi
 )
+
+set(ODT_LIBS_HOST_EXTRA NPYLoader NPYLoaderApi CSVHelper)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/OnDeviceTraining/src)
 
 if(${ODT_PICO_PLATFORM})
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pico/pico_post.cmake)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/pico/pico_post.cmake)
+elseif(${ODT_HOST_PLATFORM})
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/host/host_post.cmake)
+    target_compile_definitions(HOST PRIVATE
+        MNIST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/examples/data")
 elseif(${ODT_TARGET} STREQUAL "STM32F756XG")
-add_subdirectory(cmake/stm32cubemx/stm32f756xg)
+    add_subdirectory(cmake/stm32cubemx/stm32f756xg)
 elseif(${ODT_TARGET} STREQUAL "STM32L476XG")
-add_subdirectory(cmake/stm32cubemx/stm32l476xg)
+    add_subdirectory(cmake/stm32cubemx/stm32l476xg)
 elseif(${ODT_TARGET} STREQUAL "STM32L4R5XI")
-add_subdirectory(cmake/stm32cubemx/stm32l4r5zi)
+    add_subdirectory(cmake/stm32cubemx/stm32l4r5zi)
 endif()
 
 endif()

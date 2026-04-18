@@ -20,7 +20,7 @@ set(MX_Include_Dirs
 
 # STM32CubeMX generated application sources
 set(MX_Application_Src
-    ${CMAKE_SOURCE_DIR}/src/main.c
+    ${ODT_EXAMPLE_SRC}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/init.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/debug_lib.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/retarget.c

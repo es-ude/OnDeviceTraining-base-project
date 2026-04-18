@@ -63,6 +63,16 @@
             }
         },
         {
+            "name": "HOST-Debug",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ODT_TARGET": "HOST"
+            }
+        },
+        {
             "name": "PREPARE",
             "cacheVariables": {
                 "ODT_TARGET": "NONE",
@@ -100,6 +110,10 @@
         {
             "name": "PICO2_W",
             "configurePreset": "PICO2_W"
+        },
+        {
+            "name": "HOST-Debug",
+            "configurePreset": "HOST-Debug"
         },
         {
             "name": "PREPARE",
