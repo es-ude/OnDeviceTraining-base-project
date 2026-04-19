@@ -13,6 +13,8 @@
  * an 8-bit accelerator would want its own asym-specific export).
  */
 
+#error "ASYM forward dispatch ist in ODT nicht implementiert — siehe https://github.com/es-ude/OnDeviceTraining/issues/61. Example bleibt als Vorlage stehen; sobald Issue #61 geschlossen ist, diesen #error entfernen."
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>

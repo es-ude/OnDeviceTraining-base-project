@@ -8,6 +8,8 @@
  * Runs on HOST too for a quick sanity check of the subset generator.
  */
 
+#error "ASYM forward dispatch ist in ODT nicht implementiert — siehe https://github.com/es-ude/OnDeviceTraining/issues/61. Example bleibt als Vorlage stehen; sobald Issue #61 geschlossen ist, diesen #error entfernen."
+
 #include <stdio.h>
 #include <stddef.h>
 
