@@ -1,0 +1,126 @@
+"""
+Vergleichs-Harness zwischen ODT-Binary und einer PyTorch-Referenz.
+
+Usage (aus einem per-example Skript):
+
+    from compare import compare_with_pytorch, Config
+
+    def build_pytorch_model():
+        import torch.nn as nn
+        return nn.Sequential(nn.Linear(784, 20), nn.ReLU(), nn.Linear(20, 10))
+
+    def train_pytorch(model, seed): ...  # returns final metric (float)
+
+    cfg = Config(
+        binary_path="build/HOST-Debug/HOST",
+        example_name="mlp_mnist_float32_host",
+        stdout_metric_regex=r"accuracy=([\d.]+)%",
+        higher_is_better=True,
+        n_seeds=5,
+        sigma_multiplier=2.0,
+        pytorch_build=build_pytorch_model,
+        pytorch_train=train_pytorch,
+    )
+    compare_with_pytorch(cfg)
+
+Exit code 0 bei Pass (ODT innerhalb N σ von PyTorch-Mean), 1 bei Fail.
+"""
+from __future__ import annotations
+
+import dataclasses
+import math
+import os
+import re
+import statistics
+import subprocess
+import sys
+from typing import Callable
+
+
+@dataclasses.dataclass
+class Config:
+    binary_path: str
+    example_name: str
+    stdout_metric_regex: str            # capture group 1 = float metric
+    higher_is_better: bool
+    n_seeds: int
+    sigma_multiplier: float
+    pytorch_build: Callable[[], "torch.nn.Module"]  # noqa: F821
+    pytorch_train: Callable[["torch.nn.Module", int], float]  # noqa: F821
+    odt_build_preset: str = "HOST-Debug"
+
+
+def run_odt_once(cfg: Config) -> float:
+    """Baut das ODT-Example und extrahiert die Metrik aus stdout."""
+    env = os.environ.copy()
+    cmake_cfg = subprocess.run(
+        ["cmake", "--preset", cfg.odt_build_preset,
+         f"-DODT_EXAMPLE={cfg.example_name}"],
+        capture_output=True, text=True, env=env,
+    )
+    if cmake_cfg.returncode != 0:
+        raise RuntimeError(f"cmake configure failed:\n{cmake_cfg.stderr}")
+    cmake_build = subprocess.run(
+        ["cmake", "--build", "--preset", cfg.odt_build_preset],
+        capture_output=True, text=True, env=env,
+    )
+    if cmake_build.returncode != 0:
+        raise RuntimeError(f"cmake build failed:\n{cmake_build.stderr}")
+    run = subprocess.run(
+        [cfg.binary_path], capture_output=True, text=True, env=env,
+    )
+    if run.returncode != 0:
+        raise RuntimeError(f"ODT binary failed:\n{run.stdout}\n{run.stderr}")
+    match = re.search(cfg.stdout_metric_regex, run.stdout)
+    if not match:
+        raise RuntimeError(
+            f"Konnte Metrik nicht parsen. Regex: {cfg.stdout_metric_regex}\n"
+            f"Stdout:\n{run.stdout}"
+        )
+    return float(match.group(1))
+
+
+def run_pytorch_seeds(cfg: Config) -> list[float]:
+    import torch
+    results = []
+    for seed in range(cfg.n_seeds):
+        torch.manual_seed(seed)
+        model = cfg.pytorch_build()
+        metric = cfg.pytorch_train(model, seed)
+        results.append(metric)
+        print(f"  [pytorch seed={seed}] metric={metric:.4f}")
+    return results
+
+
+def compare_with_pytorch(cfg: Config) -> int:
+    print(f"=== compare: {cfg.example_name} ===")
+    print(f"Running ODT example once...")
+    odt_metric = run_odt_once(cfg)
+    print(f"ODT metric: {odt_metric:.4f}")
+
+    print(f"Running PyTorch reference (N={cfg.n_seeds} seeds)...")
+    pt_metrics = run_pytorch_seeds(cfg)
+    pt_mean = statistics.fmean(pt_metrics)
+    pt_std = statistics.pstdev(pt_metrics) if len(pt_metrics) > 1 else 0.0
+    print(f"PyTorch: mean={pt_mean:.4f} std={pt_std:.4f} "
+          f"(raw: {[f'{m:.4f}' for m in pt_metrics]})")
+
+    diff = odt_metric - pt_mean
+    # Wenn std=0 (z.B. durch Zufall bei sehr stabilen Trainings): fallback
+    # auf 5% relative Abweichung. Andernfalls 2σ-Regel.
+    if pt_std < 1e-9:
+        threshold = 0.05 * abs(pt_mean) if abs(pt_mean) > 1e-9 else 1e-3
+        rule = "fallback 5% relative"
+    else:
+        threshold = cfg.sigma_multiplier * pt_std
+        rule = f"{cfg.sigma_multiplier}σ"
+
+    passed = abs(diff) <= threshold
+    status = "PASS" if passed else "FAIL"
+    print(f"[{status}] diff={diff:+.4f} threshold=±{threshold:.4f} ({rule})")
+    return 0 if passed else 1
+
+
+def main_cli(cfg: Config):
+    """Entry point für per-example scripts: sys.exit mit compare-Returncode."""
+    sys.exit(compare_with_pytorch(cfg))
