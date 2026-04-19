@@ -48,3 +48,36 @@ Zeitbegrenzter Ablage-Ort für ODT-vs-PyTorch-Vergleiche, die das 2σ-Akzeptanzk
 **Nächste Schritte (Plan 2):** Gemeinsam mit Task-4-Finding in das USERAPI-Audit-Repro-Beispiel. Beide Szenarien sollten durch dasselbe Micro-Example (1 Epoche, State-Dump, Numerik-Vergleich) reproduzierbar sein.
 
 **Commit mit Script:** siehe `src/examples/reference/mlp_mnist_float32_mcu_ref.py` (FAIL-Marker im Commit).
+
+## 2026-04-19 — `mlp_mnist_stress_host`
+
+**Setup:** 784→256→128→64→32→10 + 4× ReLU + Softmax + CrossEntropy + SGD lr=0.001 + BS=32 + 5 Epochen, Xavier-uniform / Zero-Bias Init, voller MNIST-Trainset (~244K Parameter).
+
+**Ergebnis:**
+- ODT accuracy: **78.04%**
+- PyTorch mean (N=5 Seeds): **89.87% ± 0.36%**
+- diff: **-11.83 Prozentpunkte** (ODT schlechter)
+- 2σ-Toleranz: **±0.72 Prozentpunkte**
+- Verdict: **FAIL** (Diff ≈ 33σ außerhalb)
+
+**PyTorch-Rohwerte:** `[90.51, 89.88, 89.51, 89.55, 89.92]` — sehr geringe Streuung, klarer systematischer Unterschied.
+
+**Drittes Signal — Pattern verdichtet sich:**
+
+| Example | Tiefe | Absolute Lücke | σ-Abstand |
+|---|---|---|---|
+| `mlp_mnist_float32_host` | 2-Layer (784→20→10) | -3.31pp | 10.7σ |
+| `mlp_mnist_float32_mcu` | 2-Layer (Subset BS=1) | -33.00pp | 4.06σ |
+| `mlp_mnist_stress_host` | 5-Layer (784→256→128→64→32→10) | -11.83pp | 33σ |
+
+Die 5-Layer-Lücke ist 3.6× größer als die 2-Layer-Lücke bei identischen Hyperparametern (BS=32, lr=0.001, voller MNIST). Das spricht dafür, dass der ODT-PyTorch-Unterschied pro Layer akkumuliert — konsistent mit einer Gradientenberechnungs-Divergenz, die sich über Backprop-Ketten multipliziert.
+
+**Hypothesen (verdichtet aus Task 4 + 5 + 6):**
+1. **Gradientenakkumulation über Layer**: CE-Gradient weicht ab, Unterschied wächst pro Layer durch Backprop.
+2. **Xavier-Uniform-Formel**: Möglicherweise unterschiedliche fan_in/fan_out-Skalierung, mit größerem Effekt bei tieferen Netzen.
+3. **DataLoader-Shuffle-Semantik**: Nur bei unterschiedlichen Batch-Kompositionen über Epochen hinweg, nicht pro Layer — unwahrscheinlicher als Haupt-Ursache.
+4. **Float32-Akkumulations-Rundung in MatMul**: Bei 256×128 MatMul größer als bei 20×10 — erklärt den Tiefen-Effekt.
+
+**Nächste Schritte (Plan 2 USERAPI-Audit):** Das Repro-Micro-Example **muss** layer-depth-sweep enthalten (1, 2, 5 Layer, gleiche Hyperparams), um zu verifizieren dass die Lücke tatsächlich pro Layer wächst. Hypothese 1 oder 4 hat dann einen quantitativen Fingerabdruck.
+
+**Commit mit Script:** siehe `src/examples/reference/mlp_mnist_stress_host_ref.py` (FAIL-Marker im Commit).
