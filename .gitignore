@@ -20,3 +20,23 @@ devenv.local.yaml
 
 # Python
 __pycache__/
+*.pyc
+.uv-cache/
+
+# Vendored dependencies (re-fetched via cmake --preset PREPARE)
+/pico-sdk/
+/OnDeviceTraining/
+
+# Build artifacts that end up at repo root when cmake is run in-source
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/Makefile
+
+# MNIST data (re-generated via generate_subset.py)
+src/examples/data/*.npy
+src/examples/data/*.gz
+src/examples/data/*-ubyte
+
+# Brainstorming + planning drafts — local only per user preference
+/docs/superpowers/
