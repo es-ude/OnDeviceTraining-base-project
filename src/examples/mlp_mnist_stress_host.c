@@ -11,6 +11,10 @@
  * Convenience-Layer hat. Der dadurch entstehende Boilerplate ist das, was
  * Pass 1 des USERAPI-Audits quantifiziert.
  *
+ * Schreibt außerdem pro Epoche eine Zeile nach runs/mlp_mnist_stress_host_odt.csv
+ * (epoch, train_loss, eval_loss, test_accuracy) für Plot-Vergleiche gegen
+ * die PyTorch-Referenz. Pfad via ODT_CSV_PATH env var überschreibbar.
+ *
  * Host-only: ~244K Parameter × 4 B = ~970 KB passt nicht in Pico2 W (520 KB
  * SRAM). Passt bequem in Host-BSS.
  *
@@ -20,7 +24,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include <time.h>  // for clock() used to time training
 
 #include "hardware_init.h"
 
@@ -41,6 +45,7 @@
 #include "Dataset.h"
 #include "LossFunction.h"
 #include "StorageApi.h"
+#include "RNG.h"
 
 #ifndef MNIST_DATA_DIR
 #define MNIST_DATA_DIR "."
@@ -49,6 +54,8 @@
 #define MNIST_TRAIN_Y MNIST_DATA_DIR "/mnist_train_y.npy"
 #define MNIST_TEST_X  MNIST_DATA_DIR "/mnist_test_x.npy"
 #define MNIST_TEST_Y  MNIST_DATA_DIR "/mnist_test_y.npy"
+
+#define DEFAULT_CSV_PATH "runs/mlp_mnist_stress_host_odt.csv"
 
 #define INPUT_DIM     (28 * 28)
 #define H1_DIM        256
@@ -65,6 +72,9 @@
 
 static dataset_t trainDataset;
 static dataset_t testDataset;
+static layer_t *model[MODEL_SIZE];
+static dataLoader_t *testDL;
+static const char *csvPath = DEFAULT_CSV_PATH;
 
 static sample_t *getTrainSample(size_t id) { return npyGetSample(&trainDataset, id); }
 static sample_t *getTestSample (size_t id) { return npyGetSample(&testDataset,  id); }
@@ -88,14 +98,40 @@ static void flattenItems(tensorArray_t *arr) {
     }
 }
 
+static void csvInit(void) {
+    const char *envPath = getenv("ODT_CSV_PATH");
+    if (envPath && envPath[0] != '\0') csvPath = envPath;
+    FILE *f = fopen(csvPath, "w");
+    if (!f) {
+        fprintf(stderr, "Could not open CSV log %s\n", csvPath);
+        return;
+    }
+    fprintf(f, "epoch,train_loss,eval_loss,test_accuracy\n");
+    fclose(f);
+    printf("CSV log: %s\n", csvPath);
+}
+
 static void onEpochEnd(size_t epoch, float trainLoss, float evalLoss) {
-    printf("  epoch %zu: train_loss=%.4f eval_loss=%.4f\n",
-           epoch + 1, (double)trainLoss, (double)evalLoss);
+    float acc = evaluationEpochAccuracy(model, MODEL_SIZE, testDL, NUM_CLASSES, inference);
+    FILE *f = fopen(csvPath, "a");
+    if (f) {
+        fprintf(f, "%zu,%.6f,%.6f,%.6f\n",
+                epoch + 1, (double)trainLoss, (double)evalLoss, (double)(acc * 100.0));
+        fclose(f);
+    }
+    printf("  epoch %zu: train_loss=%.4f eval_loss=%.4f test_acc=%.2f%%\n",
+           epoch + 1, (double)trainLoss, (double)evalLoss, (double)(acc * 100.0));
 }
 
 int main(void) {
     init();
     printf("mlp_mnist_stress_host: 784->256->128->64->32->10 MLP (stress-test)\n");
+
+    /* ODT_SEED: same-seed cascade as host.c (see comment there). */
+    uint32_t odtSeed = 42;
+    const char *seedEnv = getenv("ODT_SEED");
+    if (seedEnv && seedEnv[0] != '\0') odtSeed = (uint32_t)atoi(seedEnv);
+    printf("ODT_SEED=%u\n", (unsigned)odtSeed);
 
     trainDataset.items  = npyLoad(MNIST_TRAIN_X);
     trainDataset.labels = npyLoad(MNIST_TRAIN_Y);
@@ -110,12 +146,11 @@ int main(void) {
     flattenItems(testDataset.items);
 
     dataLoader_t *trainDL = dataLoaderInit(getTrainSample, getTrainSize, BATCH_SIZE,
-                                            NULL, NULL, true, 42, true);
-    dataLoader_t *testDL  = dataLoaderInit(getTestSample,  getTestSize,  1,
-                                            NULL, NULL, false, 0, true);
+                                            NULL, NULL, true, odtSeed, true);
+    testDL = dataLoaderInit(getTestSample, getTestSize, 1,
+                             NULL, NULL, false, 0, true);
 
     quantization_t *q = quantizationInitFloat();
-    layer_t *model[MODEL_SIZE];
 
     /* =========================================================================
      * LAYER 1: Linear 784 -> 256  (ABSICHTLICH OHNE HELPER — Boilerplate sichtbar)
@@ -210,6 +245,8 @@ int main(void) {
     /* Ende Boilerplate-Sektion. Ab hier: gewöhnliches Training. */
 
     optimizer_t *sgd = sgdMCreateOptim(LEARNING_RATE, 0.f, 0.f, model, MODEL_SIZE, FLOAT32);
+
+    csvInit();
 
     clock_t t0 = clock();
     trainingRunResult_t res = trainingRun(

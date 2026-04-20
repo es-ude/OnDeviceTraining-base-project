@@ -6,9 +6,9 @@
  * as src/examples/data/mnist_pretrained_float32.h so the mnist_inference
  * example can flash the exact same network onto an MCU.
  *
- * This file mirrors MnistExperiment.c upstream but (a) only runs on a host
- * build (it uses fopen + npyLoad), (b) does not depend on any CSV logging,
- * (c) writes a C-header with the trained parameters at the end.
+ * Also writes a per-epoch CSV log (epoch, train_loss, eval_loss, test_accuracy)
+ * for offline plotting against the PyTorch reference runs. Path comes from
+ * the ODT_CSV_PATH env var and falls back to runs/mlp_mnist_float32_host_odt.csv.
  *
  * Data prerequisite: run `uv run src/examples/data/generate_subset.py` once
  * to create the .npy files under src/examples/data/.
@@ -16,7 +16,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include <string.h>
+#include <time.h>  // for clock() used to time training
 
 #include "hardware_init.h"
 
@@ -38,6 +39,7 @@
 #include "StorageApi.h"
 #include "LossFunction.h"
 #include "Linear.h"
+#include "RNG.h"
 
 #ifndef MNIST_DATA_DIR
 #define MNIST_DATA_DIR "."
@@ -48,6 +50,7 @@
 #define MNIST_TEST_Y  MNIST_DATA_DIR "/mnist_test_y.npy"
 
 #define PRETRAINED_OUT_PATH "src/examples/data/mnist_pretrained_float32.h"
+#define DEFAULT_CSV_PATH    "runs/mlp_mnist_float32_host_odt.csv"
 
 #define INPUT_DIM    (28 * 28)
 #define HIDDEN_DIM   20
@@ -60,6 +63,9 @@
 
 static dataset_t trainDataset;
 static dataset_t testDataset;
+static layer_t *model[MODEL_SIZE];
+static dataLoader_t *testDL;
+static const char *csvPath = DEFAULT_CSV_PATH;
 
 static sample_t *getTrainSample(size_t id) { return npyGetSample(&trainDataset, id); }
 static sample_t *getTestSample (size_t id) { return npyGetSample(&testDataset,  id); }
@@ -85,7 +91,7 @@ static void flattenItems(tensorArray_t *arr) {
     }
 }
 
-static void buildModel(layer_t **model, quantization_t *q) {
+static void buildModel(layer_t **m, quantization_t *q) {
     static float w0[HIDDEN_DIM * INPUT_DIM] = {0};
     size_t w0Dims[] = {HIDDEN_DIM, INPUT_DIM};
     tensor_t *w0P = tensorInitWithDistribution(XAVIER_UNIFORM, w0, w0Dims, 2, q, NULL, INPUT_DIM, HIDDEN_DIM);
@@ -98,8 +104,8 @@ static void buildModel(layer_t **model, quantization_t *q) {
     tensor_t *b0G = gradInitFloat(b0P, NULL);
     parameter_t *b0Pm = parameterInit(b0P, b0G);
 
-    model[0] = linearLayerInit(w0Pm, b0Pm, q, q, q, q);
-    model[1] = reluLayerInit(q, q);
+    m[0] = linearLayerInit(w0Pm, b0Pm, q, q, q, q);
+    m[1] = reluLayerInit(q, q);
 
     static float w1[OUTPUT_DIM * HIDDEN_DIM] = {0};
     size_t w1Dims[] = {OUTPUT_DIM, HIDDEN_DIM};
@@ -113,8 +119,8 @@ static void buildModel(layer_t **model, quantization_t *q) {
     tensor_t *b1G = gradInitFloat(b1P, NULL);
     parameter_t *b1Pm = parameterInit(b1P, b1G);
 
-    model[2] = linearLayerInit(w1Pm, b1Pm, q, q, q, q);
-    model[3] = softmaxLayerInit(q, q);
+    m[2] = linearLayerInit(w1Pm, b1Pm, q, q, q, q);
+    m[3] = softmaxLayerInit(q, q);
 }
 
 static void writeFloatArray(FILE *f, const char *name, const float *data, size_t n) {
@@ -154,14 +160,42 @@ static void savePretrained(const char *path, layer_t *lin0, layer_t *lin1) {
     printf("Wrote pretrained weights to %s\n", path);
 }
 
+static void csvInit(void) {
+    const char *envPath = getenv("ODT_CSV_PATH");
+    if (envPath && envPath[0] != '\0') csvPath = envPath;
+    FILE *f = fopen(csvPath, "w");
+    if (!f) {
+        fprintf(stderr, "Could not open CSV log %s: %s\n", csvPath, "fopen failed");
+        return;
+    }
+    fprintf(f, "epoch,train_loss,eval_loss,test_accuracy\n");
+    fclose(f);
+    printf("CSV log: %s\n", csvPath);
+}
+
 static void onEpochEnd(size_t epoch, float trainLoss, float evalLoss) {
-    printf("  epoch %zu: train_loss=%.4f eval_loss=%.4f\n",
-           epoch + 1, (double)trainLoss, (double)evalLoss);
+    float acc = evaluationEpochAccuracy(model, MODEL_SIZE, testDL, NUM_CLASSES, inference);
+    FILE *f = fopen(csvPath, "a");
+    if (f) {
+        fprintf(f, "%zu,%.6f,%.6f,%.6f\n",
+                epoch + 1, (double)trainLoss, (double)evalLoss, (double)(acc * 100.0));
+        fclose(f);
+    }
+    printf("  epoch %zu: train_loss=%.4f eval_loss=%.4f test_acc=%.2f%%\n",
+           epoch + 1, (double)trainLoss, (double)evalLoss, (double)(acc * 100.0));
 }
 
 int main(void) {
     init();
     printf("mlp_mnist_float32_host: loading MNIST from %s\n", MNIST_DATA_DIR);
+
+    /* ODT_SEED env var controls both DataLoader shuffle AND Xavier init —
+     * dataLoaderInit calls rngSetSeed which then flows into tensorInitWithDistribution
+     * via rngNextFloat. Default 42 matches the pre-seed-sweep baseline. */
+    uint32_t odtSeed = 42;
+    const char *seedEnv = getenv("ODT_SEED");
+    if (seedEnv && seedEnv[0] != '\0') odtSeed = (uint32_t)atoi(seedEnv);
+    printf("ODT_SEED=%u\n", (unsigned)odtSeed);
 
     trainDataset.items  = npyLoad(MNIST_TRAIN_X);
     trainDataset.labels = npyLoad(MNIST_TRAIN_Y);
@@ -176,15 +210,16 @@ int main(void) {
     flattenItems(testDataset.items);
 
     dataLoader_t *trainDL = dataLoaderInit(getTrainSample, getTrainSize, BATCH_SIZE,
-                                            NULL, NULL, true, 42, true);
-    dataLoader_t *testDL  = dataLoaderInit(getTestSample,  getTestSize,  1,
-                                            NULL, NULL, false, 0, true);
+                                            NULL, NULL, true, odtSeed, true);
+    testDL = dataLoaderInit(getTestSample, getTestSize, 1,
+                             NULL, NULL, false, 0, true);
 
     quantization_t *q = quantizationInitFloat();
-    layer_t *model[MODEL_SIZE];
     buildModel(model, q);
 
     optimizer_t *sgd = sgdMCreateOptim(LEARNING_RATE, 0.f, 0.f, model, MODEL_SIZE, FLOAT32);
+
+    csvInit();
 
     clock_t t0 = clock();
     trainingRunResult_t res = trainingRun(
@@ -199,6 +234,10 @@ int main(void) {
            (double)(t1 - t0) / CLOCKS_PER_SEC,
            (double)res.finalTrainLoss, (double)res.finalEvalLoss, (double)accuracy * 100.0);
 
-    savePretrained(PRETRAINED_OUT_PATH, model[0], model[2]);
+    /* Only write canonical pretrained.h when no seed override is in effect —
+     * keeps the committed .h deterministic during seed-sweep comparisons. */
+    if (!seedEnv) {
+        savePretrained(PRETRAINED_OUT_PATH, model[0], model[2]);
+    }
     return 0;
 }

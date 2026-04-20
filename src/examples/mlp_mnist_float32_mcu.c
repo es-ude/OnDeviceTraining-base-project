@@ -7,8 +7,13 @@
  * buffer for the float-normalised image — multi-sample batches would
  * overwrite each other.
  *
+ * Also writes a per-epoch CSV log (epoch, train_loss, eval_loss, test_accuracy).
+ * Path comes from ODT_CSV_PATH, default runs/mlp_mnist_float32_mcu_odt.csv.
+ * On MCU, `runs/` must exist and be writable; on HOST builds compare.py
+ * handles that.
+ *
  * Runs on HOST too (useful for quickly validating the subset generator).
- * On MCU expect a few minutes of training for the default NUM_EPOCHS — the
+ * On MCU expect several minutes of training for the default NUM_EPOCHS — the
  * point is to demonstrate the flow, not to compete with the host run.
  *
  * Prerequisite: run generate_subset.py once so data/mnist_train_subset.h
@@ -16,6 +21,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <stddef.h>
 
 #include "hardware_init.h"
@@ -36,6 +42,7 @@
 #include "DataLoader.h"
 #include "Dataset.h"
 #include "LossFunction.h"
+#include "RNG.h"
 
 #include "data/mnist_train_subset.h"
 #include "data/mnist_test_subset.h"
@@ -49,6 +56,8 @@
 #define LEARNING_RATE 0.01f
 #define MODEL_SIZE    4
 
+#define DEFAULT_CSV_PATH "runs/mlp_mnist_float32_mcu_odt.csv"
+
 /* Reusable per-call buffers. Safe only while BATCH_SIZE == 1.
  * Tensor structs are created once and reused — only the underlying data
  * gets overwritten. DO NOT call freeTensor on these; the data points to
@@ -60,6 +69,10 @@ static size_t labelDims[] = {1, OUTPUT_DIM};
 static tensor_t *curItem  = NULL;
 static tensor_t *curLabel = NULL;
 static sample_t  curSample;
+
+static layer_t *model[MODEL_SIZE];
+static dataLoader_t *testDL;
+static const char *csvPath = DEFAULT_CSV_PATH;
 
 static void initSampleTensors(void) {
     curItem  = tensorInitFloat(itemBuf,  itemDims,  2, NULL);
@@ -88,7 +101,7 @@ static sample_t *getTestSample(size_t id) {
 static size_t getTrainSize(void) { return MNIST_TRAIN_SUBSET_SIZE; }
 static size_t getTestSize(void)  { return MNIST_TEST_SUBSET_SIZE;  }
 
-static void buildModel(layer_t **model, quantization_t *q) {
+static void buildModel(layer_t **m, quantization_t *q) {
     static float w0[HIDDEN_DIM * INPUT_DIM] = {0};
     size_t w0Dims[] = {HIDDEN_DIM, INPUT_DIM};
     tensor_t *w0P = tensorInitWithDistribution(XAVIER_UNIFORM, w0, w0Dims, 2, q, NULL, INPUT_DIM, HIDDEN_DIM);
@@ -101,8 +114,8 @@ static void buildModel(layer_t **model, quantization_t *q) {
     tensor_t *b0G = gradInitFloat(b0P, NULL);
     parameter_t *b0Pm = parameterInit(b0P, b0G);
 
-    model[0] = linearLayerInit(w0Pm, b0Pm, q, q, q, q);
-    model[1] = reluLayerInit(q, q);
+    m[0] = linearLayerInit(w0Pm, b0Pm, q, q, q, q);
+    m[1] = reluLayerInit(q, q);
 
     static float w1[OUTPUT_DIM * HIDDEN_DIM] = {0};
     size_t w1Dims[] = {OUTPUT_DIM, HIDDEN_DIM};
@@ -116,13 +129,33 @@ static void buildModel(layer_t **model, quantization_t *q) {
     tensor_t *b1G = gradInitFloat(b1P, NULL);
     parameter_t *b1Pm = parameterInit(b1P, b1G);
 
-    model[2] = linearLayerInit(w1Pm, b1Pm, q, q, q, q);
-    model[3] = softmaxLayerInit(q, q);
+    m[2] = linearLayerInit(w1Pm, b1Pm, q, q, q, q);
+    m[3] = softmaxLayerInit(q, q);
+}
+
+static void csvInit(void) {
+    const char *envPath = getenv("ODT_CSV_PATH");
+    if (envPath && envPath[0] != '\0') csvPath = envPath;
+    FILE *f = fopen(csvPath, "w");
+    if (!f) {
+        fprintf(stderr, "Could not open CSV log %s\n", csvPath);
+        return;
+    }
+    fprintf(f, "epoch,train_loss,eval_loss,test_accuracy\n");
+    fclose(f);
+    printf("CSV log: %s\n", csvPath);
 }
 
 static void onEpochEnd(size_t epoch, float trainLoss, float evalLoss) {
-    printf("  epoch %zu: train_loss=%.4f eval_loss=%.4f\n",
-           epoch + 1, (double)trainLoss, (double)evalLoss);
+    float acc = evaluationEpochAccuracy(model, MODEL_SIZE, testDL, NUM_CLASSES, inference);
+    FILE *f = fopen(csvPath, "a");
+    if (f) {
+        fprintf(f, "%zu,%.6f,%.6f,%.6f\n",
+                epoch + 1, (double)trainLoss, (double)evalLoss, (double)(acc * 100.0));
+        fclose(f);
+    }
+    printf("  epoch %zu: train_loss=%.4f eval_loss=%.4f test_acc=%.2f%%\n",
+           epoch + 1, (double)trainLoss, (double)evalLoss, (double)(acc * 100.0));
 }
 
 int main(void) {
@@ -131,18 +164,25 @@ int main(void) {
     printf("mlp_mnist_float32_mcu: %d train + %d test samples\n",
            MNIST_TRAIN_SUBSET_SIZE, MNIST_TEST_SUBSET_SIZE);
 
+    /* ODT_SEED: same-seed cascade as host.c (see comment there). */
+    uint32_t odtSeed = 42;
+    const char *seedEnv = getenv("ODT_SEED");
+    if (seedEnv && seedEnv[0] != '\0') odtSeed = (uint32_t)atoi(seedEnv);
+    printf("ODT_SEED=%u\n", (unsigned)odtSeed);
+
     initSampleTensors();
 
     dataLoader_t *trainDL = dataLoaderInit(getTrainSample, getTrainSize, BATCH_SIZE,
-                                            NULL, NULL, true, 42, true);
-    dataLoader_t *testDL  = dataLoaderInit(getTestSample,  getTestSize,  BATCH_SIZE,
-                                            NULL, NULL, false, 0, true);
+                                            NULL, NULL, true, odtSeed, true);
+    testDL = dataLoaderInit(getTestSample, getTestSize, BATCH_SIZE,
+                             NULL, NULL, false, 0, true);
 
     quantization_t *q = quantizationInitFloat();
-    layer_t *model[MODEL_SIZE];
     buildModel(model, q);
 
     optimizer_t *sgd = sgdMCreateOptim(LEARNING_RATE, 0.f, 0.f, model, MODEL_SIZE, FLOAT32);
+
+    csvInit();
 
     trainingRunResult_t res = trainingRun(
         model, MODEL_SIZE, CROSS_ENTROPY,

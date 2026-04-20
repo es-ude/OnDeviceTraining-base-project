@@ -40,3 +40,6 @@ src/examples/data/*-ubyte
 
 # Brainstorming + planning drafts — local only per user preference
 /docs/superpowers/
+
+# Per-run CSV logs from compare-harness runs (ODT + PyTorch per-seed)
+/runs/
