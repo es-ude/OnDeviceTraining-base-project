@@ -57,7 +57,7 @@ def train(model, seed):
     train_loader = DataLoader(train_ds, batch_size=32, shuffle=False, drop_last=True)
     optim = torch.optim.SGD(model.parameters(), lr=0.001)
 
-    for epoch in range(10):
+    for epoch in range(50):
         model.train()
         for xb, yb in train_loader:
             optim.zero_grad()
@@ -85,7 +85,7 @@ if __name__ == "__main__":
         example_name="mlp_mnist_float32_host",
         stdout_metric_regex=r"accuracy=([\d.]+)%",
         higher_is_better=True,
-        n_seeds=5,
+        n_seeds=20,
         sigma_multiplier=2.0,
         pytorch_build=build_model,
         pytorch_train=train,

@@ -45,7 +45,7 @@
 #define OUTPUT_DIM    10
 #define NUM_CLASSES   10
 #define BATCH_SIZE    1
-#define NUM_EPOCHS    3
+#define NUM_EPOCHS    50
 #define LEARNING_RATE 0.01f
 #define MODEL_SIZE    4
 

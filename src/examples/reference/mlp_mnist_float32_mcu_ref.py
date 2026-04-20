@@ -47,7 +47,7 @@ def train(model, seed):
                               generator=torch.Generator().manual_seed(seed))
     optim = torch.optim.SGD(model.parameters(), lr=0.01)  # ODT mcu nutzt 0.01
 
-    for epoch in range(3):
+    for epoch in range(50):
         model.train()
         for xb, yb in train_loader:
             optim.zero_grad()
@@ -69,7 +69,7 @@ if __name__ == "__main__":
         example_name="mlp_mnist_float32_mcu",
         stdout_metric_regex=r"subset_accuracy=([\d.]+)%",
         higher_is_better=True,
-        n_seeds=5,
+        n_seeds=20,
         sigma_multiplier=2.0,
         pytorch_build=build_model,
         pytorch_train=train,

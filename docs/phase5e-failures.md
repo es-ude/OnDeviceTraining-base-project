@@ -25,6 +25,26 @@ Zeitbegrenzter Ablage-Ort für ODT-vs-PyTorch-Vergleiche, die das 2σ-Akzeptanzk
 
 **Commit mit Script:** siehe `src/examples/reference/mlp_mnist_float32_host_ref.py` (wurde trotz FAIL committed — das Script selbst ist korrekt, FAIL ist ein echtes ODT-Finding).
 
+### 2026-04-20 — Re-Run: FAIL persistiert, sogar schärfer (symmetrische 50 Epochen, N=20)
+
+**Re-Run Setup:** Identisches Modell/Hyperparams, aber **beide Seiten 50 Epochen**, PyTorch **N=20 Seeds**.
+
+**Ergebnis:**
+- ODT accuracy: **88.88%** (vorher 86.00% bei 10 Epochen → +2.88pp durch mehr Training)
+- PyTorch mean (N=20): **92.74% ± 0.21%** (vorher 89.31% ± 0.31% bei 10ep → +3.43pp, std tighter)
+- diff: **-3.86 Prozentpunkte** (vorher -3.31)
+- 2σ-Toleranz: **±0.42 Prozentpunkte**
+- Verdict: **FAIL** (Diff ≈ 18σ außerhalb, vorher 10.7σ)
+
+**PyTorch-Rohwerte:** 20 Seeds mit Range [92.45, 93.22]. **Kein einziger PyTorch-Seed unter 92.45%**, ODT bei 88.88% = 3.57pp unter PyTorch-Minimum.
+
+**Interpretation:** Im Gegensatz zu MCU (wo der FAIL mit mehr Epochen zu einem PASS wurde) **bleibt der Host-Gap auf full-MNIST erhalten und wird statistisch schärfer**:
+- Beide Seiten konvergieren weiter mit mehr Epochen, aber PyTorch gewinnt +0.55pp mehr als ODT.
+- N=20 schrumpft PyTorch-std von 0.31 auf 0.21 → engere Statistik, FAIL geht von 10.7σ auf 18σ.
+- Kein Seed-Artefakt, kein Init-Streuungs-Artefakt, kein Epochen-Artefakt: **echter systematischer Unterschied**.
+
+**Konsequenz für Plan 2:** Priorität ist dieser Host-Fall, nicht MCU. Die Hypothesen aus Task 4 (CE-Gradient, Xavier-Skalierung, DataLoader-Shuffle, Akkumulation) bleiben unverändert gültig. Das Micro-Example sollte auf full-MNIST / Host-Skala basieren, nicht auf Subsets.
+
 ## 2026-04-19 — `mlp_mnist_float32_mcu`
 
 **Setup:** 784→20→ReLU→10→Softmax + CrossEntropy + SGD lr=0.01 + BS=1 + 3 Epochen, Xavier-uniform / Zero-Bias Init, 100-Sample-Trainset / 20-Sample-Testset (MCU-Budget-Subset).
@@ -48,6 +68,19 @@ Zeitbegrenzter Ablage-Ort für ODT-vs-PyTorch-Vergleiche, die das 2σ-Akzeptanzk
 **Nächste Schritte (Plan 2):** Gemeinsam mit Task-4-Finding in das USERAPI-Audit-Repro-Beispiel. Beide Szenarien sollten durch dasselbe Micro-Example (1 Epoche, State-Dump, Numerik-Vergleich) reproduzierbar sein.
 
 **Commit mit Script:** siehe `src/examples/reference/mlp_mnist_float32_mcu_ref.py` (FAIL-Marker im Commit).
+
+### 2026-04-20 — Resolution: PASS bei symmetrischem 50-Epochen-Setup
+
+**Re-Run Setup:** Identisches Modell/Hyperparams, aber **beide Seiten 50 Epochen**, PyTorch **N=20 Seeds**.
+
+**Ergebnis:**
+- ODT accuracy: **55.00%** (vorher 30.00% bei 3 Epochen → +25pp durch mehr Training)
+- PyTorch mean (N=20): **65.25% ± 5.58%** (vorher 63.00% ± 8.12% bei 3ep → nur +2.25pp, da auf 100-Sample-Subset fast sofort plateaued)
+- diff: **-10.25 Prozentpunkte**
+- 2σ-Toleranz: **±11.17 Prozentpunkte**
+- Verdict: **PASS** (gerade so, -1.83σ)
+
+**Interpretation:** Der ursprüngliche FAIL war überwiegend ein Epochen-Mismatch-Artefakt — ODT brauchte deutlich mehr Iterationen, um PyTorchs Plateau zu erreichen. Die Hypothesen 1-3 (BS=1-Sensitivität, Numerik, Init bei kleinen Modellen) sind damit für diesen Fall **schwächer motiviert**. ODT's Trajectory ist aber nach wie vor ~10pp unter PyTorch — nicht identisch, sondern "asymptotisch im selben Bereich". Kein harter Bug-Fingerprint mehr auf MCU-Skala.
 
 ## 2026-04-19 — `mlp_mnist_stress_host`
 
