@@ -263,9 +263,15 @@ int main(void) {
     flattenItems(trainDataset.items);
     flattenItems(testDataset.items);
 
-    /* Im Dump-Modus: kein Shuffle, Batch-Indizes 0..BATCH_SIZE-1. */
+    /* Im Dump-Modus: kein Shuffle, Batch-Indizes 0..BATCH_SIZE-1.
+     * ODT_DISABLE_SHUFFLE=1: kein Shuffle im Full-Training-Pfad (fuer H3 —
+     * DataLoader-Shuffle-Isolation). singleBatch-Dump-Modus impliziert das
+     * bereits; der zusaetzliche Flag schaltet es unabhaengig davon. */
+    const int disableShuffle = (getenv("ODT_DISABLE_SHUFFLE") != NULL);
+    const int noShuffle = singleBatch || disableShuffle;
+    if (disableShuffle) printf("ODT_DISABLE_SHUFFLE=1 (H3): shuffle=false\n");
     dataLoader_t *trainDL = dataLoaderInit(getTrainSample, getTrainSize, BATCH_SIZE,
-                                            NULL, NULL, !singleBatch, odtSeed, true);
+                                            NULL, NULL, !noShuffle, odtSeed, true);
     testDL = dataLoaderInit(getTestSample, getTestSize, 1,
                              NULL, NULL, false, 0, true);
 

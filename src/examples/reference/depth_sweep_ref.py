@@ -78,10 +78,18 @@ def _eval(model, x_test_t, y_test_t):
     return eval_loss, acc
 
 
-def train(model, seed: int, hidden_layers: int):
+def train(model, seed: int, hidden_layers: int, shuffle: bool = True):
     """Full-training — spiegelt die ODT-Laufumgebung (fixed-perm, bs=32, lr=0.001,
     Softmax+CE, Xavier-Init, Bias=0). Schreibt auch eine per-Epoch-CSV damit
-    Plot-Vergleiche wie bei mlp_mnist_float32_host moeglich sind."""
+    Plot-Vergleiche wie bei mlp_mnist_float32_host moeglich sind.
+
+    shuffle=True: einmalige numpy-Permutation der Trainingsdaten (spiegelt
+    ODT DataLoader mit shuffle=true, das genau einmal beim Init shuffelt und
+    dann die permutierte Reihenfolge ueber alle Epochen beibehaelt).
+    shuffle=False: identische Reihenfolge wie ODT mit ODT_DISABLE_SHUFFLE=1
+    (Indizes 0..N-1 in Original-NPY-Reihenfolge ueber alle Epochen). Verwendet
+    fuer H3 (DataLoader-Shuffle-Isolation).
+    """
     torch.manual_seed(seed)
     x_train, y_train, x_test, y_test = load_mnist()
 
@@ -91,10 +99,11 @@ def train(model, seed: int, hidden_layers: int):
     # den Python-seed als numpy-Permutation-Seed und kommt auf eine eigene
     # Reihenfolge — das ist OK, weil der Vergleich statistisch (N-σ) ist, nicht
     # bitweise.
-    rng = np.random.default_rng(seed + 1)
-    perm = rng.permutation(len(x_train))
-    x_train = x_train[perm]
-    y_train = y_train[perm]
+    if shuffle:
+        rng = np.random.default_rng(seed + 1)
+        perm = rng.permutation(len(x_train))
+        x_train = x_train[perm]
+        y_train = y_train[perm]
 
     x_test_t = torch.from_numpy(x_test)
     y_test_t = torch.from_numpy(y_test)
@@ -104,8 +113,10 @@ def train(model, seed: int, hidden_layers: int):
     optim = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
 
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    # Example-Name bekommt Depth-Suffix, damit die drei Sweeps nicht kollidieren.
-    example_name = f"{EXAMPLE_NAME}_d{hidden_layers}"
+    # Example-Name bekommt Depth-Suffix (+ optional "_noshuffle"), damit die
+    # Sweeps nicht kollidieren.
+    name_suffix = "_noshuffle" if not shuffle else ""
+    example_name = f"{EXAMPLE_NAME}_d{hidden_layers}{name_suffix}"
     csv_path = RUNS_DIR / f"{example_name}_pytorch_seed{seed:02d}.csv"
     write_run_metadata(csv_path, {
         "framework": "pytorch",
@@ -135,8 +146,9 @@ def train(model, seed: int, hidden_layers: int):
             "dataset": "MNIST",
             "train_size": int(len(x_train)),
             "test_size": int(len(x_test)),
-            "shuffle_seed": seed + 1,
-            "shuffle_semantics": "once-at-init (matches ODT DataLoader)",
+            "shuffle_seed": (seed + 1) if shuffle else None,
+            "shuffle_semantics": ("once-at-init (matches ODT DataLoader)"
+                                   if shuffle else "no shuffle (matches ODT_DISABLE_SHUFFLE=1)"),
         },
     })
     with open(csv_path, "w", newline="") as fh:
@@ -271,8 +283,9 @@ def state_dump(hidden_layers: int, dump_dir: Path, seed: int,
     print(f"[state-dump] wrote to {dump_dir} (hidden_layers={hidden_layers}, seed={seed})")
 
 
-def main_full(hidden_layers: int, n_seeds: int = 20) -> None:
-    example_name = f"{EXAMPLE_NAME}_d{hidden_layers}"
+def main_full(hidden_layers: int, n_seeds: int = 20, shuffle: bool = True) -> None:
+    name_suffix = "_noshuffle" if not shuffle else ""
+    example_name = f"{EXAMPLE_NAME}_d{hidden_layers}{name_suffix}"
     cfg = Config(
         binary_path="build/HOST-Debug/HOST",
         example_name=EXAMPLE_NAME,  # source file name (without depth suffix)
@@ -281,7 +294,7 @@ def main_full(hidden_layers: int, n_seeds: int = 20) -> None:
         n_seeds=n_seeds,
         sigma_multiplier=2.0,
         pytorch_build=lambda: build_model(hidden_layers),
-        pytorch_train=lambda m, s: train(m, s, hidden_layers),
+        pytorch_train=lambda m, s: train(m, s, hidden_layers, shuffle=shuffle),
         odt_build_preset="HOST-Debug",
         odt_metadata={
             "framework": "odt",
@@ -327,9 +340,13 @@ if __name__ == "__main__":
                    help="Directory with pre_w_k.npy / pre_b_k.npy to override "
                         "Xavier init (matches an ODT dump bitwise). Only valid "
                         "with --state-dump.")
+    p.add_argument("--no-shuffle", action="store_true",
+                   help="Disable the numpy one-shot permutation on PyTorch side "
+                        "(matches ODT_DISABLE_SHUFFLE=1 on the ODT side). "
+                        "Used for H3 (DataLoader-shuffle-semantics isolation).")
     args = p.parse_args()
     if args.state_dump:
         state_dump(args.hidden_layers, args.state_dump, args.seed,
                    load_init_from=args.load_init_from)
     else:
-        main_full(args.hidden_layers, args.n_seeds)
+        main_full(args.hidden_layers, args.n_seeds, shuffle=not args.no_shuffle)
