@@ -94,6 +94,12 @@ elseif(${ODT_HOST_PLATFORM})
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/host/host_post.cmake)
     target_compile_definitions(HOST PRIVATE
         MNIST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/src/examples/data")
+    # Plan 2 Audit: allow -DDEPTH_SWEEP_HIDDEN_LAYERS=<N> at configure time to
+    # parameterize mlp_mnist_depth_sweep_host.c without modifying the source.
+    if(DEFINED DEPTH_SWEEP_HIDDEN_LAYERS)
+        target_compile_definitions(HOST PRIVATE
+            DEPTH_SWEEP_HIDDEN_LAYERS=${DEPTH_SWEEP_HIDDEN_LAYERS})
+    endif()
 elseif(${ODT_TARGET} STREQUAL "STM32F756XG")
     add_subdirectory(cmake/stm32cubemx/stm32f756xg)
 elseif(${ODT_TARGET} STREQUAL "STM32L476XG")
