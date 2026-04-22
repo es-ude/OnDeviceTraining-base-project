@@ -113,4 +113,22 @@ Die 5-Layer-Lücke ist 3.6× größer als die 2-Layer-Lücke bei identischen Hyp
 
 **Nächste Schritte (Plan 2 USERAPI-Audit):** Das Repro-Micro-Example **muss** layer-depth-sweep enthalten (1, 2, 5 Layer, gleiche Hyperparams), um zu verifizieren dass die Lücke tatsächlich pro Layer wächst. Hypothese 1 oder 4 hat dann einen quantitativen Fingerabdruck.
 
+---
+
+## 2026-04-22+ — Plan 2 Divergence Investigation Outcome
+
+Die drei Phase-5e-FAILs (`mlp_mnist_float32_host`, `mlp_mnist_float32_mcu`, `mlp_mnist_stress_host`) wurden in Plan 2 systematisch auf fünf Hypothesen geprüft. Ergebnisse:
+
+| Hypothese | Status | Referenz |
+|---|---|---|
+| H1: CE-Gradient ohne Batch-Normalisierung | **CONFIRMED** | `odt-userapi-findings-misc.md` F1 |
+| H2: Xavier-Uniform-Formel | REFUTED (negative result) | F3 |
+| H3: DataLoader-Shuffle-Semantik | REFUTED (partially dominated by F2) | F5 |
+| H4: FP32-MatMul-Akkumulation | REFUTED (negative result) | F4 |
+| H5: Loss-Reduktions-Semantik | REFUTED (plan hypothesis was wrong) | F6 |
+
+**Dominante Divergenzquelle:** Nur H1 überlebt als echte Divergenzquelle. Der CE-Gradient wird elementweise ohne Division durch `batch_size` geschrieben (`CrossEntropy.c:57-67`), was die effektive Lernrate am Optimizer auf `batch_size × user_lr` hebt. Plus ein **Bonus-Befund** (F2: ODT DataLoader `indices[]` unter-initialisiert — `DataLoaderApi.c:28` allokiert 60000 Einträge, `DataLoader.c:37` füllt nur 1875 davon, Rest bleibt calloc-zero → jedes Training sieht silently nur ~3% des Datasets pro Epoch), der H3's Shuffle-Unsensitivität teilweise erklärt und jede ODT-Trainingsläufe in diesem Repo betrifft.
+
+Das volle Dossier mit Begründungen, Zahlen und Remediation-Vorschlägen steht in `docs/odt-userapi-findings-misc.md`. Plan 3 (Issue-Filing auf `es-ude/OnDeviceTraining`) baut auf dieser Finding-Liste auf — primär F1 + F2 als High-Priority-Bugs, S2/S3/S6 als Medium-Priority, F3-F5 explizit als ausgeschlossene Divergenzquellen dokumentiert (negative results reduzieren die Issue-Fläche).
+
 **Commit mit Script:** siehe `src/examples/reference/mlp_mnist_stress_host_ref.py` (FAIL-Marker im Commit).
