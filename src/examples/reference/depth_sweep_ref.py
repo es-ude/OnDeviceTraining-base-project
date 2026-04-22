@@ -163,9 +163,17 @@ def train(model, seed: int, hidden_layers: int):
     return acc
 
 
-def state_dump(hidden_layers: int, dump_dir: Path, seed: int) -> None:
+def state_dump(hidden_layers: int, dump_dir: Path, seed: int,
+               load_init_from: Path | None = None) -> None:
     """Single-Batch-Snapshot: pre-weights, pre-ReLU activations, softmax output,
-    loss (sum + mean) und gradients (sum + mean reduction)."""
+    loss (sum + mean) und gradients (sum + mean reduction).
+
+    Wenn load_init_from gesetzt ist, werden die Pre-Weights aus dem gegebenen
+    Verzeichnis geladen (pre_w_k.npy / pre_b_k.npy, typischerweise ein ODT-
+    Dump), damit die Initialisierung bitweise mit dem ODT-Run matcht. Das ist
+    noetig fuer H4/H2/H6-Vergleiche, bei denen der PyTorch-Init sonst die
+    Divergenz dominieren wuerde.
+    """
     dump_dir.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -175,8 +183,21 @@ def state_dump(hidden_layers: int, dump_dir: Path, seed: int) -> None:
     xb = torch.from_numpy(x_train[:BATCH_SIZE])
     yb = torch.from_numpy(y_train[:BATCH_SIZE])
 
-    # Basis-Model bauen + Pre-Weights dumpen.
+    # Basis-Model bauen + (optional) Pre-Weights aus externer Quelle laden +
+    # dann dumpen.
     model = build_model(hidden_layers)
+    if load_init_from is not None:
+        load_init_from = Path(load_init_from)
+        k = 0
+        for m in model:
+            if isinstance(m, nn.Linear):
+                w = np.load(load_init_from / f"pre_w_{k}.npy")
+                # Bias wurde als {1, out_features} gedumpt — squeeze auf 1D.
+                b = np.load(load_init_from / f"pre_b_{k}.npy").squeeze()
+                with torch.no_grad():
+                    m.weight.copy_(torch.from_numpy(w))
+                    m.bias.copy_(torch.from_numpy(b))
+                k += 1
     k = 0
     linear_ref = []
     for m in model:
@@ -302,8 +323,13 @@ if __name__ == "__main__":
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--n-seeds", type=int, default=20,
                    help="Number of seeds for full-training sweep (default 20).")
+    p.add_argument("--load-init-from", type=Path, default=None,
+                   help="Directory with pre_w_k.npy / pre_b_k.npy to override "
+                        "Xavier init (matches an ODT dump bitwise). Only valid "
+                        "with --state-dump.")
     args = p.parse_args()
     if args.state_dump:
-        state_dump(args.hidden_layers, args.state_dump, args.seed)
+        state_dump(args.hidden_layers, args.state_dump, args.seed,
+                   load_init_from=args.load_init_from)
     else:
         main_full(args.hidden_layers, args.n_seeds)

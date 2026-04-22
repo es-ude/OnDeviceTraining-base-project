@@ -23,12 +23,18 @@
  *      (kein Shuffle, Indizes 0..BATCH_SIZE-1 — so gibt dataLoaderInit sie zurueck).
  *   3. Dumpt Initial-Weights/-Biases aller Linear-Layer in .npy-Dateien
  *      (pre_w_<k>.npy, pre_b_<k>.npy).
- *   4. Laeuft BATCH_SIZE-mal calculateGradsSequential pro Sample und akkumuliert
+ *   4. Dumpt Post-forward Pre-ReLU-Activations pro Linear-Layer
+ *      (pre_relu_<k>.npy, Shape {BATCH_SIZE, out_features}). Da ODT's Linear-
+ *      Layer keine Broadcasting-Bias-Add unterstuetzt (Arithmetic.c erzwingt
+ *      strikte Shape-Gleichheit), wird pro Sample inference(model, 2*k+1,
+ *      sample[i]->item) aufgerufen, die {1, out}-Ergebnisse werden zeilenweise
+ *      in einen Batch-Buffer geschrieben. Siehe Task-4-Kommentar unten.
+ *   5. Laeuft BATCH_SIZE-mal calculateGradsSequential pro Sample und akkumuliert
  *      Gradients (= "sum"-Reduktion; das macht trainingBatchDefault genauso,
  *      zero_grad wird erst nach dem Optimizer-Step aufgerufen).
- *   5. Dumpt Post-Backward-Gradients (post_grad_w_<k>.npy, post_grad_b_<k>.npy)
+ *   6. Dumpt Post-Backward-Gradients (post_grad_w_<k>.npy, post_grad_b_<k>.npy)
  *      und loss_sum.npy (Summe der per-Sample-Verluste, siehe CrossEntropy.c).
- *   6. Beendet ohne SGD-Step.
+ *   7. Beendet ohne SGD-Step.
  *
  * API-Deltas ggue. dem urspruenglichen Plan-Snippet (verifiziert gegen
  * OnDeviceTraining/src/src/...):
@@ -363,6 +369,60 @@ int main(void) {
         /* 2. Batch 0 holen (deterministische Reihenfolge dank shuffle=false). */
         batch_t *batch = trainDL->getBatch(trainDL, 0);
 
+        /* 2b. Post-forward Activations dumpen (Task 4 / H4).
+         *
+         *  Variante 2 + Per-Sample-Loop (gewaehlt): ODT's layer_t exponiert
+         *  kein output-Member (siehe OnDeviceTraining/src/src/layer/include/
+         *  Layer.h — layer_t ist { layerType_t type; layerConfig_t* config; },
+         *  ohne Activations-Cache). Eine erste Version versuchte Full-Batch-
+         *  Inference ({32,784}), aber ODT's linearForwardFloat ruft
+         *  addFloat32TensorsInplace(output, bias), und doDimensionsMatch in
+         *  Arithmetic.c:29 verlangt strikt gleiche Shapes OHNE Broadcasting.
+         *  Output {32,32} + Bias {1,32} => PRINT_ERROR "Dimensions don't match".
+         *
+         *  Workaround: pro Sample inference(model, 2*k+1, sample[i]->item),
+         *  das Ergebnis ({1, out}) zeilenweise in einen Batch-Buffer
+         *  ({BATCH_SIZE, out}) einsortieren, einmal pro Linear-Layer k. Kosten:
+         *  O(numLinear * batch_size) Teil-Inferences, macht fuer N=4, BS=32
+         *  ca. 5*32=160 Aufrufe — immer noch unterhalb der Training-Zeit.
+         *
+         *  WICHTIG: NICHT bis zum Softmax ausfuehren — ODT's Softmax hat einen
+         *  globalen Max/Sum ueber alle Elemente (siehe Softmax.c:32-48) und
+         *  rechnet ergo bei Batch-Input FALSCH; fuer pre_relu reicht stop-
+         *  before-softmax vollkommen.
+         */
+
+        /* Per-Linear-Layer Dump-Buffer. Grosze out_features max = max(HIDDEN_DIM,
+         * OUTPUT_DIM) = 32 (HIDDEN_DIM). Reserve {BATCH_SIZE, HIDDEN_DIM}. */
+        static float preReluBuf[BATCH_SIZE * HIDDEN_DIM];
+
+        for (int k = 0; k < numLinear; k++) {
+            int numLayersToRun = (k < DEPTH_SWEEP_HIDDEN_LAYERS) ? (2 * k + 1)
+                                                                 : (MODEL_SIZE - 1);
+            size_t outFeatures = 0;
+
+            for (size_t i = 0; i < batch->size; i++) {
+                tensor_t *out = inference(model, (size_t)numLayersToRun,
+                                          batch->samples[i]->item);
+                /* out->shape ist {1, out_features}. */
+                if (i == 0) {
+                    outFeatures = out->shape->dimensions[1];
+                }
+                memcpy(&preReluBuf[i * outFeatures], out->data,
+                       outFeatures * sizeof(float));
+                /* Output von inference() ist Framework-allocated (via
+                 * reserveMemory in InferenceApi.c). freeTensor hier ist der
+                 * gleiche Pfad den evaluationBatchAccuracy in
+                 * TrainingLoopApi.c:65 benutzt. Gotcha #1 gilt nur fuer
+                 * user-Buffers, nicht fuer inference-Outputs. */
+                freeTensor(out);
+            }
+
+            char name[32];
+            snprintf(name, sizeof(name), "pre_relu_%d", k);
+            dumpMatrix(dumpDir, name, preReluBuf, (size_t)batch->size, outFeatures);
+        }
+
         /* 3. Per-Sample calculateGradsSequential; Gradienten akkumulieren
          *    intern (linearCalcWeightGradsFloat32 macht addFloat32TensorsInplace).
          *    Loss-Sum wird separat aufgesammelt. */
@@ -396,8 +456,9 @@ int main(void) {
         }
 
         freeBatch(batch);
-        printf("[state-dump] wrote pre_w/pre_b/post_grad_w/post_grad_b/loss_sum/loss_mean "
-               "for %d linear layer(s) to %s\n", numLinear, dumpDir);
+        printf("[state-dump] wrote pre_w/pre_b/pre_relu/post_grad_w/post_grad_b/"
+               "loss_sum/loss_mean for %d linear layer(s) to %s\n",
+               numLinear, dumpDir);
         /* Deliberately exit before trainingRun — snprintf above is OK because
          * we're about to return, no trainingRun will run afterwards. */
         return 0;
