@@ -286,6 +286,9 @@ FETCHCONTENT_UPDATES_DISCONNECTED:BOOL=OFF
 //Git command line client
 GIT_EXECUTABLE:FILEPATH=/nix/store/6qbj40r0s289k5slmy8yna5x2hfz01wg-git-2.53.0/bin/git
 
+//Name of the example (src/examples/<ODT_EXAMPLE>.c) to compile.
+ODT_EXAMPLE:STRING=linear_regression
+
 //No help, variable specified on the command line.
 ODT_PREPARE:UNINITIALIZED=1
 

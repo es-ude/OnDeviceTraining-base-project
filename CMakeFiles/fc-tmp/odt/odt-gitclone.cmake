@@ -52,13 +52,13 @@ endif()
 
 execute_process(
   COMMAND "/nix/store/6qbj40r0s289k5slmy8yna5x2hfz01wg-git-2.53.0/bin/git"
-          checkout "main" --
+          checkout "develop" --
   WORKING_DIRECTORY "/Users/leo/work/OnDeviceTraining-base-project/OnDeviceTraining/src"
   RESULT_VARIABLE error_code
   ${maybe_show_command}
 )
 if(error_code)
-  message(FATAL_ERROR "Failed to checkout tag: 'main'")
+  message(FATAL_ERROR "Failed to checkout tag: 'develop'")
 endif()
 
 set(init_submodules TRUE)
