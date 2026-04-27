@@ -52,11 +52,11 @@
       exit 1
     fi
     old_sha=$(git -C "$ODT_DIR" rev-parse --short HEAD)
-    git -C "$ODT_DIR" fetch origin main
-    git -C "$ODT_DIR" reset --hard origin/main
+    git -C "$ODT_DIR" fetch origin develop
+    git -C "$ODT_DIR" reset --hard origin/develop
     new_sha=$(git -C "$ODT_DIR" rev-parse --short HEAD)
     if [ "$old_sha" = "$new_sha" ]; then
-      echo "vendored ODT already at upstream main ($new_sha)."
+      echo "vendored ODT already at upstream develop ($new_sha)."
     else
       echo "vendored ODT: $old_sha -> $new_sha"
       git -C "$ODT_DIR" log --oneline "$old_sha..$new_sha"
