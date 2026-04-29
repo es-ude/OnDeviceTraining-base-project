@@ -1,5 +1,7 @@
 # Phase 5e Comparison Failures
 
+> **Status 2026-04-29:** Die hier dokumentierten FAILs für `mlp_mnist_float32_host` sind durch die Upstream-Fixes #90 (CE-Gradient 1/B) + #91 (DataLoader indices[]) **erledigt**. Re-Validation auf ODT `develop` ergibt PASS — siehe Resolution-Section am Dokument-Ende. `mlp_mnist_stress_host` und `mlp_mnist_float32_mcu` sind unter den Fixes noch nicht re-gemessen.
+
 Zeitbegrenzter Ablage-Ort für ODT-vs-PyTorch-Vergleiche, die das 2σ-Akzeptanzkriterium nicht erfüllen. Diese Findings wandern in Plan 2 (USERAPI-Audit) in die endgültige Issue-Dokumentation.
 
 ## 2026-04-19 — `mlp_mnist_float32_host`
@@ -132,3 +134,51 @@ Die drei Phase-5e-FAILs (`mlp_mnist_float32_host`, `mlp_mnist_float32_mcu`, `mlp
 Das volle Dossier mit Begründungen, Zahlen und Remediation-Vorschlägen steht in `docs/odt-userapi-findings-misc.md`. Plan 3 (Issue-Filing auf `es-ude/OnDeviceTraining`) baut auf dieser Finding-Liste auf — primär F1 + F2 als High-Priority-Bugs, S2/S3/S6 als Medium-Priority, F3-F5 explizit als ausgeschlossene Divergenzquellen dokumentiert (negative results reduzieren die Issue-Fläche).
 
 **Commit mit Script:** siehe `src/examples/reference/mlp_mnist_stress_host_ref.py` (FAIL-Marker im Commit).
+
+---
+
+## 2026-04-29 — Resolution: `mlp_mnist_float32_host` PASS auf ODT `develop`
+
+Re-Validation nach den Upstream-Fixes (#90 CrossEntropy 1/batch_size, #91 DataLoader indices[]) auf der `develop`-Branch (vendored ODT HEAD inkl. `28088b3`).
+
+**Setup:** Identische Architektur (784→20→ReLU→10→Softmax + CE + SGD lr=0.001 + BS=32), 50 Epochen, voller MNIST-Trainset, **N=10 Seeds** je Seite, build flag `-O1` (user-spezifiziert), Output unter `runs/develop_check/`.
+
+**Ergebnis:**
+
+| Seite | Mean | Std | Range |
+|---|---|---|---|
+| ODT (develop) | **92.6870 %** | 0.2033 | 92.40 – 93.02 |
+| PyTorch (Ref) | **92.7320 %** | 0.2601 | 92.45 – 93.22 |
+
+- diff: ODT − PT = **−0.045 pp**
+- 2σ-Toleranz: **±0.5202 pp** (auf PyTorch-σ basiert)
+- Verdict: **PASS** (`harness exit: 0`)
+- Wall-clock: 6h34m
+
+**Δ gegenüber Pre-Fix-Baseline:**
+
+| Metrik | Pre-Fix (main, 50 ep / N=20) | Post-Fix (develop, 50 ep / N=10) |
+|---|---|---|
+| ODT mean | 88.88 % | 92.69 % |
+| PyTorch mean | 92.74 ± 0.21 % | 92.73 ± 0.26 % |
+| diff | −3.86 pp / 18σ | −0.045 pp / ~0.17σ |
+| Verdict | FAIL | **PASS** |
+
+**Interpretation:**
+- Die zwei Upstream-Fixes erklären den Phase-5e-Host-FAIL **vollständig**. H1 (CE-Gradient 32× scaling) plus F2 (DataLoader indices under-init) waren beide notwendig — und zusammen hinreichend.
+- ODT-std (0.20) ist unter PyTorch-std (0.26) — Streuung beider Seiten ist vergleichbar, kein Hinweis auf zusätzliche systematische Restdivergenz.
+- N=10 ist unter dem ursprünglichen N=20 der Phase-5e-FAIL-Messung; im Verdict-Threshold sichtbar (±0.52 pp statt ±0.42 pp). Selbst mit der engeren Pre-Fix-Schwelle wäre der gemessene −0.045-pp-Diff noch innerhalb (Faktor ~10× unter Limit).
+- `mlp_mnist_stress_host` (5-Layer, war −11.83 pp / 33σ) und `mlp_mnist_float32_mcu` sind unter `develop` **noch nicht re-gemessen**. Erwartet wird ebenfalls PASS, weil derselbe Mechanismus (CE-Gradient pro Layer, DataLoader pro Training) wirkt — aber nicht verifiziert.
+
+**Hypothesen-Status nach Resolution:**
+
+| Hypothese | Endgültiger Status |
+|---|---|
+| H1: CE-Gradient ohne 1/batch_size | **CONFIRMED + UPSTREAM-FIXED (#90)** |
+| F2: DataLoader indices[] under-init | **CONFIRMED + UPSTREAM-FIXED (#91)** |
+| H2: Xavier-Uniform-Formel | REFUTED (Plan 2) |
+| H3: DataLoader-Shuffle-Semantik | REFUTED (Plan 2) |
+| H4: FP32-MatMul-Akkumulation | REFUTED (Plan 2) |
+| H5: Loss-Reduktions-Semantik | REFUTED (Plan 2 — Hypothese war falsch) |
+
+**Output-Artefakte:** `runs/develop_check/_compare.log`, 10× `mlp_mnist_float32_host_odt_seed??.csv` + JSON, 10× `mlp_mnist_float32_host_pytorch_seed??.csv` + JSON.
